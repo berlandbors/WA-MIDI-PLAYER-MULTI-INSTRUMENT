@@ -21,7 +21,12 @@ export class MIDIPlayer {
         this.recordingDestination = null;
 
         // Web Audio Font
-        this.player = new WebAudioFontPlayer();
+        if (typeof WebAudioFontPlayer !== 'undefined') {
+            this.player = new WebAudioFontPlayer();
+        } else {
+            console.warn('WebAudioFontPlayer not available, will use fallback synthesizer when playing notes');
+            this.player = null;
+        }
         this.instruments = {}; // Кэш: {program: font}
         this.channelPrograms = new Array(16).fill(0); // Program по каналам (GM)
         this.loadingFonts = new Set(); // Предотвращает дубли загрузки
@@ -145,7 +150,9 @@ export class MIDIPlayer {
 
                 if (event.type === 'programChange') {
                     this.channelPrograms[event.channel] = event.program;
-                    this.loadInstrument(event.program); // Ленивая загрузка
+                    // For channel 9 (drums), load special drums instrument
+                    const programToLoad = event.channel === 9 ? 128 : event.program;
+                    this.loadInstrument(programToLoad); // Ленивая загрузка
                 } else if (event.type === 'noteOn') {
                     noteMap.set(event.note + '_' + event.channel, {
                         note: event.note,
@@ -176,11 +183,12 @@ export class MIDIPlayer {
     async playNote(note, velocity, duration, channel) {
         if (!this.audioContext) return;
 
-        const program = this.channelPrograms[channel] || 0;
+        // Channel 9 is drums in MIDI standard
+        const program = channel === 9 ? 128 : (this.channelPrograms[channel] || 0);
         await this.loadInstrument(program); // Убедитесь, что font загружен
 
         const instrument = this.instruments[program];
-        if (!instrument) {
+        if (!instrument || !this.player) {
             // Fallback to old synthesizer
             return this.fallbackPlayNote(note, velocity, duration);
         }
@@ -264,28 +272,53 @@ export class MIDIPlayer {
         if (this.instruments[program] || this.loadingFonts.has(program)) return;
         this.loadingFonts.add(program);
 
-        // GM mapping: program -> font URL
+        // GM mapping: program -> font URL and variable number
+        // Note: File numbers don't always match program numbers in WebAudioFont
+        // For example, Piano (program 0) uses file 0010_JCLive_sf2.js
         const fontUrls = {
-            0: 'https://surikov.github.io/webaudiofontdata/sound/0010_JCLive_sf2.js', // Piano
-            24: 'https://surikov.github.io/webaudiofontdata/sound/0025_JCLive_sf2.js', // Guitar
-            32: 'https://surikov.github.io/webaudiofontdata/sound/0033_JCLive_sf2.js', // Bass
-            48: 'https://surikov.github.io/webaudiofontdata/sound/0048_JCLive_sf2.js', // Strings
-            0: 'https://surikov.github.io/webaudiofontdata/sound/0000_JCLive_sf2.js', // Drums (channel 9 default)
+            0: { url: 'https://surikov.github.io/webaudiofontdata/sound/0010_JCLive_sf2.js', varNum: 10 }, // Piano
+            24: { url: 'https://surikov.github.io/webaudiofontdata/sound/0025_JCLive_sf2.js', varNum: 25 }, // Guitar
+            32: { url: 'https://surikov.github.io/webaudiofontdata/sound/0033_JCLive_sf2.js', varNum: 33 }, // Bass
+            48: { url: 'https://surikov.github.io/webaudiofontdata/sound/0048_JCLive_sf2.js', varNum: 48 }, // Strings
+            // Program 128 is used internally to represent drums for MIDI channel 9 (percussion channel)
+            // This is not a standard MIDI program number but a convenient way to map channel 9
+            128: { url: 'https://surikov.github.io/webaudiofontdata/sound/0000_JCLive_sf2.js', varNum: 0 }, // Drums (channel 9)
             // Добавьте больше по GM-спецификации
         };
 
-        const url = fontUrls[program] || fontUrls[0]; // Default to piano
+        const fontInfo = fontUrls[program] || fontUrls[0]; // Default to piano
+        const url = fontInfo.url;
+        const varNum = fontInfo.varNum;
 
         try {
             const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
             const script = await response.text();
+            // NOTE: Using eval() here as required by WebAudioFont library design
+            // Security: Only load fonts from trusted CDN (surikov.github.io)
+            // Consider implementing Content Security Policy and Subresource Integrity checks
             eval(script); // Загружает font в window
+            
             // Предполагаем naming convention: _tone_XXXX_JCLive_sf2
-            const varName = `_tone_${program.toString().padStart(4, '0')}_JCLive_sf2`;
-            this.instruments[program] = window[varName];
+            // Use the varNum from fontInfo which corresponds to the actual file number
+            const varName = `_tone_${varNum.toString().padStart(4, '0')}_JCLive_sf2`;
+            
+            if (window[varName]) {
+                this.instruments[program] = window[varName];
+                console.log(`Loaded instrument ${program} (${varName})`);
+            } else {
+                throw new Error(`Variable ${varName} not found in loaded script`);
+            }
         } catch (error) {
             console.error('Failed to load font for program', program, error);
-            this.instruments[program] = this.instruments[0] || null; // Fallback
+            // Fallback to piano if available, otherwise null
+            if (program !== 0 && this.instruments[0]) {
+                this.instruments[program] = this.instruments[0];
+            } else {
+                this.instruments[program] = null;
+            }
         }
         this.loadingFonts.delete(program);
     }
@@ -508,7 +541,8 @@ export class MIDIPlayer {
                     if (noteOn) {
                         const noteDuration = eventTime - noteOn.startTime;
                         
-                        const program = this.channelPrograms[noteOn.channel] || 0;
+                        // Channel 9 is drums in MIDI standard
+                        const program = noteOn.channel === 9 ? 128 : (this.channelPrograms[noteOn.channel] || 0);
                         await this.loadInstrument(program);
                         const instrument = this.instruments[program];
                         

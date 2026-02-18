@@ -24,7 +24,7 @@ export class MIDIPlayer {
         if (typeof WebAudioFontPlayer !== 'undefined') {
             this.player = new WebAudioFontPlayer();
         } else {
-            console.warn('WebAudioFontPlayer not available, will use fallback synthesizer');
+            console.warn('WebAudioFontPlayer not available, will use fallback synthesizer when playing notes');
             this.player = null;
         }
         this.instruments = {}; // Кэш: {program: font}
@@ -272,12 +272,16 @@ export class MIDIPlayer {
         if (this.instruments[program] || this.loadingFonts.has(program)) return;
         this.loadingFonts.add(program);
 
-        // GM mapping: program -> font URL
+        // GM mapping: program -> font URL and variable number
+        // Note: File numbers don't always match program numbers in WebAudioFont
+        // For example, Piano (program 0) uses file 0010_JCLive_sf2.js
         const fontUrls = {
             0: { url: 'https://surikov.github.io/webaudiofontdata/sound/0010_JCLive_sf2.js', varNum: 10 }, // Piano
             24: { url: 'https://surikov.github.io/webaudiofontdata/sound/0025_JCLive_sf2.js', varNum: 25 }, // Guitar
             32: { url: 'https://surikov.github.io/webaudiofontdata/sound/0033_JCLive_sf2.js', varNum: 33 }, // Bass
             48: { url: 'https://surikov.github.io/webaudiofontdata/sound/0048_JCLive_sf2.js', varNum: 48 }, // Strings
+            // Program 128 is used internally to represent drums for MIDI channel 9 (percussion channel)
+            // This is not a standard MIDI program number but a convenient way to map channel 9
             128: { url: 'https://surikov.github.io/webaudiofontdata/sound/0000_JCLive_sf2.js', varNum: 0 }, // Drums (channel 9)
             // Добавьте больше по GM-спецификации
         };
@@ -292,6 +296,9 @@ export class MIDIPlayer {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             const script = await response.text();
+            // NOTE: Using eval() here as required by WebAudioFont library design
+            // Security: Only load fonts from trusted CDN (surikov.github.io)
+            // Consider implementing Content Security Policy and Subresource Integrity checks
             eval(script); // Загружает font в window
             
             // Предполагаем naming convention: _tone_XXXX_JCLive_sf2

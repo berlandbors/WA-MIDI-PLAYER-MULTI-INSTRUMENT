@@ -274,15 +274,17 @@ export class MIDIPlayer {
 
         // GM mapping: program -> font URL
         const fontUrls = {
-            0: 'https://surikov.github.io/webaudiofontdata/sound/0010_JCLive_sf2.js', // Piano
-            24: 'https://surikov.github.io/webaudiofontdata/sound/0025_JCLive_sf2.js', // Guitar
-            32: 'https://surikov.github.io/webaudiofontdata/sound/0033_JCLive_sf2.js', // Bass
-            48: 'https://surikov.github.io/webaudiofontdata/sound/0048_JCLive_sf2.js', // Strings
-            128: 'https://surikov.github.io/webaudiofontdata/sound/0000_JCLive_sf2.js', // Drums (channel 9)
+            0: { url: 'https://surikov.github.io/webaudiofontdata/sound/0010_JCLive_sf2.js', varNum: 10 }, // Piano
+            24: { url: 'https://surikov.github.io/webaudiofontdata/sound/0025_JCLive_sf2.js', varNum: 25 }, // Guitar
+            32: { url: 'https://surikov.github.io/webaudiofontdata/sound/0033_JCLive_sf2.js', varNum: 33 }, // Bass
+            48: { url: 'https://surikov.github.io/webaudiofontdata/sound/0048_JCLive_sf2.js', varNum: 48 }, // Strings
+            128: { url: 'https://surikov.github.io/webaudiofontdata/sound/0000_JCLive_sf2.js', varNum: 0 }, // Drums (channel 9)
             // Добавьте больше по GM-спецификации
         };
 
-        const url = fontUrls[program] || fontUrls[0]; // Default to piano
+        const fontInfo = fontUrls[program] || fontUrls[0]; // Default to piano
+        const url = fontInfo.url;
+        const varNum = fontInfo.varNum;
 
         try {
             const response = await fetch(url);
@@ -293,9 +295,8 @@ export class MIDIPlayer {
             eval(script); // Загружает font в window
             
             // Предполагаем naming convention: _tone_XXXX_JCLive_sf2
-            // For drums (program 128), the file is 0000, for others use the program number
-            const fileNumber = program === 128 ? 0 : program;
-            const varName = `_tone_${fileNumber.toString().padStart(4, '0')}_JCLive_sf2`;
+            // Use the varNum from fontInfo which corresponds to the actual file number
+            const varName = `_tone_${varNum.toString().padStart(4, '0')}_JCLive_sf2`;
             
             if (window[varName]) {
                 this.instruments[program] = window[varName];

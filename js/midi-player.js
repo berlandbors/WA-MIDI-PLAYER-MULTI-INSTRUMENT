@@ -29,6 +29,7 @@ export class MIDIPlayer {
         this.instruments = {}; // Кэш: {program: font}
         this.channelPrograms = new Array(16).fill(0); // Program по каналам (GM)
         this.loadingFonts = new Set(); // Предотвращает дубли загрузки
+        this.loadingPromises = new Map(); // Stores loading promises for concurrent requests
     }
 
     async init() {
@@ -250,7 +251,7 @@ export class MIDIPlayer {
         
         // If currently loading, wait for the existing promise to resolve
         if (this.loadingFonts.has(program)) {
-            const existingPromise = this.loadingPromises?.get(program);
+            const existingPromise = this.loadingPromises.get(program);
             if (existingPromise) {
                 await existingPromise;
                 return;
@@ -260,10 +261,6 @@ export class MIDIPlayer {
         this.loadingFonts.add(program);
         
         // Store the loading promise so other calls can await it
-        if (!this.loadingPromises) {
-            this.loadingPromises = new Map();
-        }
-        
         const loadPromise = this._doLoadInstrument(program);
         this.loadingPromises.set(program, loadPromise);
         
@@ -290,7 +287,9 @@ export class MIDIPlayer {
             56: { url: 'https://surikov.github.io/webaudiofontdata/sound/0560_Aspirin_sf2_file.js', var: '_tone_0560_Aspirin_sf2_file' }, // Trumpet
             73: { url: 'https://surikov.github.io/webaudiofontdata/sound/0730_Aspirin_sf2_file.js', var: '_tone_0730_Aspirin_sf2_file' }, // Flute
             // Program 128 is used internally to represent drums for MIDI channel 9 (percussion channel)
-            128: { url: 'https://surikov.github.io/webaudiofontdata/sound/12840_0_JCLive_sf2_file.js', var: '_drum_40_0_JCLive_sf2_file' }, // Drums (channel 9)
+            // WebAudioFont provides complete drum kits as multi-zone instruments
+            // Using the standard drum kit which includes all GM percussion sounds
+            128: { url: 'https://surikov.github.io/webaudiofontdata/sound/12800_0_JCLive_sf2_file.js', var: '_drum_0_0_JCLive_sf2_file' }, // Standard Drum Kit (channel 9)
         };
 
         const fontInfo = fontUrls[program] || fontUrls[0]; // Default to piano

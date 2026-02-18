@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI Player one PIANO</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🎹 MIDI Player one PIANO</h1>
+        
+        <div class="tabs">
+            <button class="tab active" data-tab="player">▶ Плеер</button>
+            <button class="tab" data-tab="export">📤 Экспорт</button>
+            <button class="tab" data-tab="import">📥 Создать</button>
+            <button class="tab" data-tab="record">🎙️ Запись</button>
+        </div>
+
+        <!-- TAB 1: ПЛЕЕР -->
+        <div class="tab-content active" id="player">
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">🎵</div>
+                <div class="upload-text">
+                    Нажмите или перетащите MIDI файл сюда
+                </div>
+            </div>
+            
+            <input type="file" id="fileInput" accept=".mid,.midi">
+            
+            <div class="file-info" id="fileInfo">
+                <div class="file-name" id="fileName"></div>
+                <div class="info-box" id="midiInfo"></div>
+                <div class="tempo-info" id="tempoInfo" style="display: none;"></div>
+            </div>
+
+            <div class="visualizer" id="visualizer">
+                <canvas id="canvas"></canvas>
+                <div class="viz-debug" id="vizDebug">Нот: 0</div>
+            </div>
+
+            <div class="visualization-mode" id="visualizationMode">
+                <button class="viz-btn selected" data-mode="bars">📊 Столбцы</button>
+                <button class="viz-btn" data-mode="wave">🌊 Волна</button>
+                <button class="viz-btn" data-mode="circle">⭕ Круг</button>
+            </div>
+
+            <div class="instrument-selector" id="instrumentSelector">
+                <label>🎹 Инструмент: Пианино</label>
+            </div>
+
+            <div class="slider-control" id="volumeControl">
+                <span class="slider-label">🔊 Громкость:</span>
+                <input type="range" id="volumeSlider" min="0" max="100" value="30">
+                <span class="slider-value" id="volumeValue">30%</span>
+            </div>
+
+            <div class="slider-control" id="tempoControl">
+                <span class="slider-label">⏱️ Темп:</span>
+                <input type="range" id="tempoSlider" min="25" max="300" value="100" step="5">
+                <span class="slider-value" id="tempoValue">100%</span>
+            </div>
+            
+            <div class="progress-container" id="progressContainer">
+                <div class="progress-bar" id="progressBar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="time-display">
+                    <span id="currentTime">0:00</span>
+                    <span id="totalTime">0:00</span>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <button id="playBtn" disabled>
+                    <span>▶</span> Играть
+                </button>
+                <button id="pauseBtn" disabled>
+                    <span>⏸</span> Пауза
+                </button>
+                <button id="stopBtn" disabled>
+                    <span>⏹</span> Стоп
+                </button>
+            </div>
+            
+            <div class="status" id="status">Загрузите MIDI файл для начала</div>
+        </div>
+
+        <!-- TAB 2: ЭКСПОРТ -->
+        <div class="tab-content" id="export">
+            <div class="help-text">
+                <h3>📤 Экспорт MIDI в JSON/WAV</h3>
+                <p>Загрузите MIDI файл в плеере, затем выберите формат экспорта.</p>
+            </div>
+
+            <div class="controls">
+                <button id="exportJsonBtn" disabled>
+                    <span>📥</span> Экспортировать в JSON
+                </button>
+                <button id="exportWavBtn" class="secondary" disabled>
+                    <span>🎵</span> Экспортировать в WAV
+                </button>
+            </div>
+
+            <div class="json-editor">
+                <label>JSON данные:</label>
+                <textarea id="jsonOutput" placeholder="JSON данные появятся здесь после экспорта..." readonly></textarea>
+            </div>
+
+            <div class="controls">
+                <button id="downloadJsonBtn" class="secondary" disabled>
+                    <span>💾</span> Скачать JSON
+                </button>
+            </div>
+        </div>
+
+        <!-- TAB 3: СОЗДАТЬ MIDI -->
+        <div class="tab-content" id="import">
+            <div class="help-text">
+                <h3>📥 Создание MIDI из JSON</h3>
+                <p>Формат JSON:</p>
+                <code>{"tracks": [{"notes": [{"note": 60, "time": 0, "duration": 0.5, "velocity": 100}]}]}</code>
+                <p style="margin-top: 10px;"><strong>note:</strong> MIDI нота (60 = C4), <strong>time:</strong> время в секундах, <strong>duration:</strong> длительность, <strong>velocity:</strong> громкость (0-127)</p>
+            </div>
+
+            <div class="upload-area-small" id="jsonUploadArea">
+                <div class="upload-icon">📄</div>
+                <div class="upload-text">
+                    Нажмите или перетащите JSON файл сюда
+                </div>
+            </div>
+            
+            <input type="file" id="jsonFileInput" accept=".json">
+
+            <div class="json-editor">
+                <label>Или введите JSON вручную:</label>
+                <textarea id="jsonInput" placeholder='{"tracks": [{"notes": [{"note": 60, "time": 0, "duration": 0.5, "velocity": 100}]}]}'></textarea>
+            </div>
+
+            <div class="controls">
+                <button id="createMidiBtn">
+                    <span>🎵</span> Создать MIDI файл
+                </button>
+                <button id="previewMidiBtn" class="secondary">
+                    <span>▶</span> Предпросмотр
+                </button>
+            </div>
+
+            <div class="status" id="importStatus"></div>
+        </div>
+
+        <!-- TAB 4: ЗАПИСЬ -->
+        <div class="tab-content" id="record">
+            <div class="help-text">
+                <h3>🎙️ Запись в аудио файл</h3>
+                <p>Загрузите MIDI файл в плеере, затем нажмите "Начать запись" и "Играть". После окончания воспроизведения нажмите "Остановить запись".</p>
+            </div>
+
+            <div class="recording-indicator" id="recordingIndicator">
+                ⚫ Идет запись...
+            </div>
+
+            <div class="controls">
+                <button id="startRecordBtn" disabled>
+                    <span>⚫</span> Начать запись
+                </button>
+                <button id="stopRecordBtn" disabled>
+                    <span>⏹</span> Остановить запись
+                </button>
+            </div>
+
+            <div class="controls">
+                <button id="downloadAudioBtn" class="secondary" disabled>
+                    <span>💾</span> Скачать аудио (WAV)
+                </button>
+            </div>
+
+            <div class="status" id="recordStatus">Загрузите MIDI файл для начала записи</div>
+        </div>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+
+    <!--script src="script-MIDI-piano.js"></script-->
+</body>
+</html>

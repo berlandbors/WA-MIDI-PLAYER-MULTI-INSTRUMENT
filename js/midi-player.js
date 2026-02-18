@@ -1,5 +1,4 @@
 import { MIDIParser } from './midi-parser.js';
-import { createAdvancedOscillator } from './audio-synth.js';
 
 export class MIDIPlayer {
     constructor(visualizer) {
@@ -30,6 +29,7 @@ export class MIDIPlayer {
         this.instruments = {}; // Кэш: {program: font}
         this.channelPrograms = new Array(16).fill(0); // Program по каналам (GM)
         this.loadingFonts = new Set(); // Предотвращает дубли загрузки
+        this.loadingPromises = new Map(); // Stores loading promises for concurrent requests
     }
 
     async init() {
@@ -38,6 +38,10 @@ export class MIDIPlayer {
         }
         if (this.audioContext.state === 'suspended') {
             await this.audioContext.resume();
+        }
+        // Preload default piano instrument
+        if (!this.instruments[0]) {
+            await this.preloadDefaultInstrument();
         }
     }
 
@@ -113,6 +117,10 @@ export class MIDIPlayer {
 
         await this.init();
         
+        // Preload instruments before playing
+        console.log('Preloading instruments before playback...');
+        await this.preloadInstrumentsFromMIDI();
+        
         this.isPlaying = true;
         this.isPaused = false;
         this.currentTime = startTime;
@@ -185,142 +193,181 @@ export class MIDIPlayer {
 
         // Channel 9 is drums in MIDI standard
         const program = channel === 9 ? 128 : (this.channelPrograms[channel] || 0);
-        await this.loadInstrument(program); // Убедитесь, что font загружен
+        
+        // Ensure instrument is loaded (should be preloaded, but fallback just in case)
+        if (!this.instruments[program]) {
+            await this.loadInstrument(program);
+        }
 
         const instrument = this.instruments[program];
-        if (!instrument || !this.player) {
-            // Fallback to old synthesizer
-            return this.fallbackPlayNote(note, velocity, duration);
+        
+        // If no instrument available, fall back to piano
+        if (!instrument && !this.instruments[0]) {
+            await this.loadInstrument(0); // Load piano as fallback
+        }
+        
+        const finalInstrument = instrument || this.instruments[0];
+        
+        if (!finalInstrument || !this.player) {
+            console.warn(`No instrument available for program ${program}, skipping note`);
+            return;
         }
 
         const now = this.audioContext.currentTime;
         const volume = (velocity / 127) * (this.volume / 100);
 
+        // Create a gain node for proper routing
+        const noteGain = this.audioContext.createGain();
+        noteGain.gain.value = 1;
+        
+        // Connect to both destination and recording if active
+        noteGain.connect(this.audioContext.destination);
+        if (this.mediaRecorder && this.isRecording && this.recordingDestination) {
+            noteGain.connect(this.recordingDestination);
+        }
+
+        // Play the note through WebAudioFont
         this.player.queueWaveTable(
             this.audioContext,
-            this.audioContext.destination,
-            instrument,
+            noteGain,
+            finalInstrument,
             now,
             note,
             duration,
             volume
         );
 
-        // Передаём ноту в визуализатор
+        // Pass note to visualizer
         this.visualizer.addNote(note, velocity);
 
-        setTimeout(() => {
-            this.visualizer.removeNote(note);
-        }, duration * 1000);
-    }
-
-    fallbackPlayNote(note, velocity, duration) {
-        // Старый код как fallback
-        const time = this.audioContext.currentTime;
-        const frequency = 440 * Math.pow(2, (note - 69) / 12);
-        
-        const soundResult = createAdvancedOscillator(
-            this.audioContext, 
-            frequency, 
-            'piano', // Fallback to piano
-            0
-        );
-        
-        const oscillator = soundResult.oscillator;
-        const customGain = soundResult.gainNode;
-        const extras = soundResult.extras || [];
-        
-        const masterGain = this.audioContext.createGain();
-        const volumeMultiplier = (velocity / 127) * (this.volume / 100);
-        
-        masterGain.gain.setValueAtTime(volumeMultiplier, time);
-        masterGain.gain.exponentialRampToValueAtTime(0.01, time + duration);
-        
-        if (customGain) {
-            customGain.connect(masterGain);
-        } else {
-            oscillator.connect(masterGain);
-        }
-        masterGain.connect(this.audioContext.destination);
-        
-        if (this.mediaRecorder && this.isRecording && this.recordingDestination) {
-            masterGain.connect(this.recordingDestination);
-        }
-        
-        if (oscillator && oscillator.start) {
-            oscillator.start(time);
-            const stopTime = soundResult.duration 
-                ? Math.max(time + duration, time + soundResult.duration)
-                : time + duration + 0.1;
-            oscillator.stop(stopTime);
-        }
-        
-        extras.forEach(osc => {
-            if (osc && osc.start) {
-                osc.start(time);
-                osc.stop(time + duration + 0.1);
-            }
-        });
-
-        this.visualizer.addNote(note, velocity);
         setTimeout(() => {
             this.visualizer.removeNote(note);
         }, duration * 1000);
     }
 
     async loadInstrument(program) {
-        if (this.instruments[program] || this.loadingFonts.has(program)) return;
+        // If already loaded, return immediately
+        if (this.instruments[program]) return;
+        
+        // If currently loading, wait for the existing promise to resolve
+        if (this.loadingFonts.has(program)) {
+            const existingPromise = this.loadingPromises.get(program);
+            if (existingPromise) {
+                await existingPromise;
+                return;
+            }
+        }
+        
         this.loadingFonts.add(program);
-
-        // GM mapping: program -> font URL and variable number
-        // Note: File numbers don't always match program numbers in WebAudioFont
-        // For example, Piano (program 0) uses file 0010_JCLive_sf2.js
+        
+        // Store the loading promise so other calls can await it
+        const loadPromise = this._doLoadInstrument(program);
+        this.loadingPromises.set(program, loadPromise);
+        
+        try {
+            await loadPromise;
+        } finally {
+            this.loadingFonts.delete(program);
+            this.loadingPromises.delete(program);
+        }
+    }
+    
+    async _doLoadInstrument(program) {
+        // GM mapping: program -> font URL and variable name
+        // WebAudioFont uses correct file naming convention with _file suffix
         const fontUrls = {
-            0: { url: 'https://surikov.github.io/webaudiofontdata/sound/0010_JCLive_sf2.js', varNum: 10 }, // Piano
-            24: { url: 'https://surikov.github.io/webaudiofontdata/sound/0025_JCLive_sf2.js', varNum: 25 }, // Guitar
-            32: { url: 'https://surikov.github.io/webaudiofontdata/sound/0033_JCLive_sf2.js', varNum: 33 }, // Bass
-            48: { url: 'https://surikov.github.io/webaudiofontdata/sound/0048_JCLive_sf2.js', varNum: 48 }, // Strings
+            0: { url: 'https://surikov.github.io/webaudiofontdata/sound/0000_JCLive_sf2_file.js', var: '_tone_0000_JCLive_sf2_file' }, // Acoustic Grand Piano
+            1: { url: 'https://surikov.github.io/webaudiofontdata/sound/0001_JCLive_sf2_file.js', var: '_tone_0001_JCLive_sf2_file' }, // Bright Acoustic Piano
+            24: { url: 'https://surikov.github.io/webaudiofontdata/sound/0240_Aspirin_sf2_file.js', var: '_tone_0240_Aspirin_sf2_file' }, // Acoustic Guitar (nylon)
+            25: { url: 'https://surikov.github.io/webaudiofontdata/sound/0250_Aspirin_sf2_file.js', var: '_tone_0250_Aspirin_sf2_file' }, // Acoustic Guitar (steel)
+            32: { url: 'https://surikov.github.io/webaudiofontdata/sound/0320_Aspirin_sf2_file.js', var: '_tone_0320_Aspirin_sf2_file' }, // Acoustic Bass
+            33: { url: 'https://surikov.github.io/webaudiofontdata/sound/0330_Aspirin_sf2_file.js', var: '_tone_0330_Aspirin_sf2_file' }, // Electric Bass (finger)
+            40: { url: 'https://surikov.github.io/webaudiofontdata/sound/0400_Aspirin_sf2_file.js', var: '_tone_0400_Aspirin_sf2_file' }, // Violin
+            48: { url: 'https://surikov.github.io/webaudiofontdata/sound/0480_Aspirin_sf2_file.js', var: '_tone_0480_Aspirin_sf2_file' }, // String Ensemble 1
+            56: { url: 'https://surikov.github.io/webaudiofontdata/sound/0560_Aspirin_sf2_file.js', var: '_tone_0560_Aspirin_sf2_file' }, // Trumpet
+            73: { url: 'https://surikov.github.io/webaudiofontdata/sound/0730_Aspirin_sf2_file.js', var: '_tone_0730_Aspirin_sf2_file' }, // Flute
             // Program 128 is used internally to represent drums for MIDI channel 9 (percussion channel)
-            // This is not a standard MIDI program number but a convenient way to map channel 9
-            128: { url: 'https://surikov.github.io/webaudiofontdata/sound/0000_JCLive_sf2.js', varNum: 0 }, // Drums (channel 9)
-            // Добавьте больше по GM-спецификации
+            // WebAudioFont provides complete drum kits as multi-zone instruments
+            // Using the standard drum kit which includes all GM percussion sounds
+            128: { url: 'https://surikov.github.io/webaudiofontdata/sound/12800_0_JCLive_sf2_file.js', var: '_drum_0_0_JCLive_sf2_file' }, // Standard Drum Kit (channel 9)
         };
 
         const fontInfo = fontUrls[program] || fontUrls[0]; // Default to piano
         const url = fontInfo.url;
-        const varNum = fontInfo.varNum;
+        const varName = fontInfo.var;
 
         try {
+            console.log(`Loading instrument ${program} from ${url}...`);
             const response = await fetch(url);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             const script = await response.text();
-            // NOTE: Using eval() here as required by WebAudioFont library design
-            // Security: Only load fonts from trusted CDN (surikov.github.io)
-            // Consider implementing Content Security Policy and Subresource Integrity checks
-            eval(script); // Загружает font в window
             
-            // Предполагаем naming convention: _tone_XXXX_JCLive_sf2
-            // Use the varNum from fontInfo which corresponds to the actual file number
-            const varName = `_tone_${varNum.toString().padStart(4, '0')}_JCLive_sf2`;
+            // Use new Function() instead of eval() for better security
+            // NOTE: This still executes arbitrary code from the CDN
+            // Security considerations:
+            // - Only load from trusted CDN (surikov.github.io)
+            // - Consider implementing Content Security Policy headers
+            // - Consider implementing Subresource Integrity (SRI) checks for production
+            const loadFont = new Function(script);
+            loadFont();
             
             if (window[varName]) {
                 this.instruments[program] = window[varName];
-                console.log(`Loaded instrument ${program} (${varName})`);
+                console.log(`✓ Loaded instrument ${program} (${varName})`);
             } else {
                 throw new Error(`Variable ${varName} not found in loaded script`);
             }
         } catch (error) {
-            console.error('Failed to load font for program', program, error);
+            console.error(`✗ Failed to load font for program ${program}:`, error);
             // Fallback to piano if available, otherwise null
             if (program !== 0 && this.instruments[0]) {
+                console.log(`  → Using piano as fallback for program ${program}`);
                 this.instruments[program] = this.instruments[0];
             } else {
                 this.instruments[program] = null;
             }
         }
-        this.loadingFonts.delete(program);
+    }
+
+    async preloadDefaultInstrument() {
+        console.log('Preloading default piano instrument...');
+        await this.loadInstrument(0); // Load piano
+    }
+
+    async preloadInstrumentsFromMIDI() {
+        if (!this.midiData) return;
+        
+        const programsToLoad = new Set();
+        
+        // Collect all program changes and channel usage
+        this.midiData.tracks.forEach(track => {
+            track.events.forEach(event => {
+                if (event.type === 'programChange') {
+                    // For channel 9 (drums), load special drums instrument
+                    const program = event.channel === 9 ? 128 : event.program;
+                    programsToLoad.add(program);
+                } else if (event.type === 'noteOn' && event.channel === 9) {
+                    // If channel 9 has notes but no program change, ensure drums are loaded
+                    programsToLoad.add(128);
+                }
+            });
+        });
+        
+        // If no program changes found, default to piano
+        if (programsToLoad.size === 0) {
+            programsToLoad.add(0);
+        }
+        
+        console.log(`Preloading ${programsToLoad.size} instruments:`, Array.from(programsToLoad));
+        
+        // Load all instruments in parallel
+        await Promise.all(
+            Array.from(programsToLoad).map(program => this.loadInstrument(program))
+        );
+        
+        console.log('✓ All instruments preloaded successfully');
     }
 
     pause() {
@@ -491,6 +538,11 @@ export class MIDIPlayer {
     async exportToWAV() {
         if (!this.midiData) return null;
 
+        console.log('Starting WAV export...');
+        
+        // First, preload all instruments needed for export
+        await this.preloadInstrumentsFromMIDI();
+
         const duration = this.duration;
         const sampleRate = 44100;
         const numberOfChannels = 2;
@@ -508,25 +560,25 @@ export class MIDIPlayer {
         const ticksPerBeat = this.midiData.ticksPerBeat;
         const tempoChanges = [];
 
-        this.midiData.tracks.forEach(track => {
-            track.events.forEach(event => {
+        // Collect tempo changes using for...of
+        for (const track of this.midiData.tracks) {
+            for (const event of track.events) {
                 if (event.type === 'tempo') {
                     tempoChanges.push({
                         tick: event.time,
                         microsecondsPerBeat: event.microsecondsPerBeat
                     });
                 }
-            });
-        });
+            }
+        }
 
         tempoChanges.sort((a, b) => a.tick - b.tick);
 
-        const scheduledOscillators = [];
-
-        this.midiData.tracks.forEach(track => {
+        // Process all tracks and schedule notes
+        for (const track of this.midiData.tracks) {
             const noteMap = new Map();
             
-            track.events.forEach(event => {
+            for (const event of track.events) {
                 const eventTime = this.ticksToSeconds(event.time, ticksPerBeat, tempoChanges) / (this.tempo / 100);
 
                 if (event.type === 'noteOn') {
@@ -543,10 +595,9 @@ export class MIDIPlayer {
                         
                         // Channel 9 is drums in MIDI standard
                         const program = noteOn.channel === 9 ? 128 : (this.channelPrograms[noteOn.channel] || 0);
-                        await this.loadInstrument(program);
-                        const instrument = this.instruments[program];
+                        const instrument = this.instruments[program] || this.instruments[0]; // Fallback to piano
                         
-                        if (instrument) {
+                        if (instrument && this.player) {
                             // Use Web Audio Font for offline rendering
                             this.player.queueWaveTable(
                                 offlineContext,
@@ -558,62 +609,24 @@ export class MIDIPlayer {
                                 (noteOn.velocity / 127)
                             );
                         } else {
-                            // Fallback to old synth
-                            const frequency = 440 * Math.pow(2, (noteOn.note - 69) / 12);
-                            const soundResult = createAdvancedOscillator(
-                                offlineContext, 
-                                frequency, 
-                                'piano',
-                                noteOn.startTime
-                            );
-                            
-                            const oscillator = soundResult.oscillator;
-                            const customGain = soundResult.gainNode;
-                            const extras = soundResult.extras || [];
-                            
-                            const noteGain = offlineContext.createGain();
-                            const volumeMultiplier = (noteOn.velocity / 127);
-                            
-                            noteGain.gain.setValueAtTime(volumeMultiplier, noteOn.startTime);
-                            noteGain.gain.exponentialRampToValueAtTime(0.01, noteOn.startTime + noteDuration);
-                            
-                            if (customGain) {
-                                customGain.connect(noteGain);
-                            } else {
-                                oscillator.connect(noteGain);
-                            }
-                            noteGain.connect(offlineGain);
-                            
-                            if (oscillator && oscillator.start) {
-                                oscillator.start(noteOn.startTime);
-                                const stopTime = soundResult.duration 
-                                    ? Math.max(noteOn.startTime + noteDuration, noteOn.startTime + soundResult.duration)
-                                    : noteOn.startTime + noteDuration + 0.1;
-                                oscillator.stop(stopTime);
-                            }
-                            
-                            extras.forEach(osc => {
-                                if (osc && osc.start) {
-                                    osc.start(noteOn.startTime);
-                                    osc.stop(noteOn.startTime + noteDuration + 0.1);
-                                }
-                            });
-                            
-                            scheduledOscillators.push({ oscillator, noteGain, extras });
+                            console.warn(`No instrument available for program ${program}, skipping note`);
                         }
                         
                         noteMap.delete(event.note + '_' + event.channel);
                     }
                 }
-            });
-        });
+            }
+        }
 
         try {
+            console.log('Rendering audio buffer...');
             const renderedBuffer = await offlineContext.startRendering();
+            console.log('Converting to WAV format...');
             const wavBlob = this.audioBufferToWav(renderedBuffer);
+            console.log('✓ WAV export completed successfully');
             return wavBlob;
         } catch (error) {
-            console.error('Ошибка рендеринга:', error);
+            console.error('✗ Error during WAV export:', error);
             throw error;
         }
     }

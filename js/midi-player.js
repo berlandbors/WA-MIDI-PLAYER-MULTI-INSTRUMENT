@@ -248,16 +248,34 @@ export class MIDIPlayer {
         // If already loaded, return immediately
         if (this.instruments[program]) return;
         
-        // If currently loading, wait for it to finish
+        // If currently loading, wait for the existing promise to resolve
         if (this.loadingFonts.has(program)) {
-            while (this.loadingFonts.has(program)) {
-                await new Promise(resolve => setTimeout(resolve, 50));
+            const existingPromise = this.loadingPromises?.get(program);
+            if (existingPromise) {
+                await existingPromise;
+                return;
             }
-            return;
         }
         
         this.loadingFonts.add(program);
-
+        
+        // Store the loading promise so other calls can await it
+        if (!this.loadingPromises) {
+            this.loadingPromises = new Map();
+        }
+        
+        const loadPromise = this._doLoadInstrument(program);
+        this.loadingPromises.set(program, loadPromise);
+        
+        try {
+            await loadPromise;
+        } finally {
+            this.loadingFonts.delete(program);
+            this.loadingPromises.delete(program);
+        }
+    }
+    
+    async _doLoadInstrument(program) {
         // GM mapping: program -> font URL and variable name
         // WebAudioFont uses correct file naming convention with _file suffix
         const fontUrls = {
@@ -288,7 +306,11 @@ export class MIDIPlayer {
             const script = await response.text();
             
             // Use new Function() instead of eval() for better security
-            // This creates a function in a separate scope but still allows access to window
+            // NOTE: This still executes arbitrary code from the CDN
+            // Security considerations:
+            // - Only load from trusted CDN (surikov.github.io)
+            // - Consider implementing Content Security Policy headers
+            // - Consider implementing Subresource Integrity (SRI) checks for production
             const loadFont = new Function(script);
             loadFont();
             
@@ -308,7 +330,6 @@ export class MIDIPlayer {
                 this.instruments[program] = null;
             }
         }
-        this.loadingFonts.delete(program);
     }
 
     async preloadDefaultInstrument() {

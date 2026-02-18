@@ -276,8 +276,8 @@ export class MIDIPlayer {
         // GM mapping: program -> font URL and variable name
         // WebAudioFont uses correct file naming convention with _file suffix
         const fontUrls = {
-            0: { url: 'https://surikov.github.io/webaudiofontdata/sound/0000_JCLive_sf2_file.js', var: '_tone_0000_JCLive_sf2_file' }, // Acoustic Grand Piano
-            1: { url: 'https://surikov.github.io/webaudiofontdata/sound/0001_JCLive_sf2_file.js', var: '_tone_0001_JCLive_sf2_file' }, // Bright Acoustic Piano
+            0: { url: 'https://surikov.github.io/webaudiofontdata/sound/0000_Aspirin_sf2_file.js', var: '_tone_0000_Aspirin_sf2_file' }, // Acoustic Grand Piano
+            1: { url: 'https://surikov.github.io/webaudiofontdata/sound/0010_Aspirin_sf2_file.js', var: '_tone_0010_Aspirin_sf2_file' }, // Bright Acoustic Piano
             24: { url: 'https://surikov.github.io/webaudiofontdata/sound/0240_Aspirin_sf2_file.js', var: '_tone_0240_Aspirin_sf2_file' }, // Acoustic Guitar (nylon)
             25: { url: 'https://surikov.github.io/webaudiofontdata/sound/0250_Aspirin_sf2_file.js', var: '_tone_0250_Aspirin_sf2_file' }, // Acoustic Guitar (steel)
             32: { url: 'https://surikov.github.io/webaudiofontdata/sound/0320_Aspirin_sf2_file.js', var: '_tone_0320_Aspirin_sf2_file' }, // Acoustic Bass
@@ -289,7 +289,7 @@ export class MIDIPlayer {
             // Program 128 is used internally to represent drums for MIDI channel 9 (percussion channel)
             // WebAudioFont provides complete drum kits as multi-zone instruments
             // Using the standard drum kit which includes all GM percussion sounds
-            128: { url: 'https://surikov.github.io/webaudiofontdata/sound/12800_0_JCLive_sf2_file.js', var: '_drum_0_0_JCLive_sf2_file' }, // Standard Drum Kit (channel 9)
+            128: { url: 'https://surikov.github.io/webaudiofontdata/sound/12800_0_Aspirin_sf2_file.js', var: '_drum_0_0_Aspirin_sf2_file' }, // Standard Drum Kit (channel 9)
         };
 
         const fontInfo = fontUrls[program] || fontUrls[0]; // Default to piano
